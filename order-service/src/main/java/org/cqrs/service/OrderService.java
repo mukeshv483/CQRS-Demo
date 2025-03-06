@@ -2,6 +2,7 @@ package org.cqrs.service;
 
 
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.cqrs.dto.OrderDto;
 import org.cqrs.event.UpdateAvailabilityEvent;
 import org.cqrs.exception.InventoryNotAvailableException;
@@ -12,8 +13,11 @@ import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
 
+import java.util.UUID;
+
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class OrderService {
 
     private  String outboundTopic = "inventory-outbound-updates";
@@ -22,7 +26,7 @@ public class OrderService {
     private final  KafkaTemplate<String, UpdateAvailabilityEvent> kafkaTemplate;
     private final InventoryService inventoryService;
 
-    public Mono<OrderEntity> createOrder(OrderDto order) {
+    public Mono<OrderEntity> createOrder(OrderDto order)  {
         if(inventoryService.checkInventoryAvailability(order.getItemNumber(),order.getQuantity())){
           InventoryEntity entity= inventoryService.getInventory(order.getItemNumber());
             entity.setQuantity(entity.getQuantity()-order.getQuantity());
@@ -30,9 +34,16 @@ public class OrderService {
             UpdateAvailabilityEvent updateAvailabilityEvent=UpdateAvailabilityEvent.builder()
                     .status(entity.getStatus())
                     .itemNumber(entity.getItemNumber())
+                    .id(UUID.randomUUID().toString())
                     .quantity(entity.getQuantity()).build();
+
             return Mono.just(saveTODB(order))
-                    .doOnSuccess(savedOrder -> kafkaTemplate.send(outboundTopic,String.valueOf(order.getItemNumber()), updateAvailabilityEvent));
+                    .map(savedOrder ->{
+                        kafkaTemplate.send(outboundTopic,String.valueOf(order.getItemNumber()), updateAvailabilityEvent);
+                    return savedOrder;
+                    }).doOnSuccess(publishOrder->{
+                        log.info("publish order inventory successfully update {}",updateAvailabilityEvent);
+                    });
 
         }
 
